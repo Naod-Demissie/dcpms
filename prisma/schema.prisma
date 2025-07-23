@@ -1,0 +1,311 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===================
+// Authentication Models (Modified to use Staff)
+// ===================
+model Staff {
+  id                          String    @id
+  createdAt                   DateTime  
+  updatedAt                   DateTime  
+  firstName                   String
+  lastName                    String
+  name                        String 
+  email                       String 
+  emailVerified               Boolean
+  image                       String? 
+  phoneNumber                 String?
+  role                        String
+  isActive                    Boolean
+  
+
+  sessions                    Sessions[]
+  accounts                    Accounts[]
+  appointmentsAsDentist       Appointment[] @relation("DentistAppointments")
+  prescriptions               Prescription[]
+  assignedQueue               Queue[]
+  treatments                  Treatment[] @relation("TreatedByStaff")
+  invoicesCreated             Invoice[]  @relation("InvoiceCreatedByStaff")
+  dentalCharts                DentalChart[]
+  @@map("staff")
+}
+
+model Sessions {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  staff     Staff    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@map("sessions")
+}
+
+model Accounts {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  staff                 Staff     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@map("accounts")
+}
+
+model Verifications {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verifications")
+}
+
+// ===================
+// Invite System for Magic Link Signup
+// ===================
+model Invite {
+  id          String    @id @default(uuid())
+  email       String    @unique
+  role        StaffRole @default(RECEPTIONIST)
+  token       String    @unique
+  expiresAt   DateTime
+  isUsed      Boolean   @default(false)
+  createdById String?   // Staff who created the invite
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// ===================
+// Enums
+// ===================
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum BloodType {
+  A_POSITIVE
+  A_NEGATIVE
+  B_POSITIVE
+  B_NEGATIVE
+  AB_POSITIVE
+  AB_NEGATIVE
+  O_POSITIVE
+  O_NEGATIVE
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum TreatmentStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PAID
+  PARTIAL
+}
+
+enum StaffRole {
+  ADMIN
+  DENTIST
+  RECEPTIONIST
+}
+
+enum QueueStatus {
+  WAITING
+  IN_TREATMENT
+  COMPLETED
+  NO_SHOW
+}
+
+enum AppointmentType {
+  CHECKUP
+  TREATMENT
+}
+
+
+model Patient {
+  id             String    @id @default(uuid())
+  firstName      String
+  lastName       String
+  gender         Gender
+  dateOfBirth    DateTime
+  phoneNumber    String?
+  email          String?   @unique
+  bloodType      BloodType?
+  street         String?
+  city           String?
+  subcity        String?
+  woreda         String?
+  houseNumber    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  appointments   Appointment[]
+  treatments     Treatment[]
+  invoices       Invoice[]
+  prescriptions  Prescription[]
+  queueEntries   Queue[]
+  medicalHistory MedicalHistory?
+  dentalCharts   DentalChart[]
+  documents      Document[]
+}
+
+model Appointment {
+  id             String           @id @default(uuid())
+  patientId      String
+  dentistId      String?
+  startTime      DateTime
+  endTime        DateTime
+  notes          String?
+  status         AppointmentStatus @default(SCHEDULED)
+  type           AppointmentType   @default(CHECKUP)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  patient        Patient           @relation(fields: [patientId], references: [id])
+  dentist        Staff?            @relation("DentistAppointments", fields: [dentistId], references: [id])
+  treatments     Treatment[]
+}
+
+model Treatment {
+  id             String       @id @default(uuid())
+  patientId      String
+  appointmentId  String?
+  treatmentType  String
+  templateId     String?
+  description    String?
+  date           DateTime?
+  cost           Float?
+  status         TreatmentStatus
+  treatedById    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  patient        Patient      @relation(fields: [patientId], references: [id])
+  appointment    Appointment? @relation(fields: [appointmentId], references: [id])
+  template       TreatmentTemplate? @relation(fields: [templateId], references: [id])
+  treatedBy      Staff?       @relation("TreatedByStaff", fields: [treatedById], references: [id])
+}
+
+model TreatmentTemplate {
+  id              String                    @id @default(uuid())
+  name            String
+  description     String?
+  estimatedCost   Float?
+  durationMinutes Int?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  treatments      Treatment[]
+}
+
+model Invoice {
+  id            String       @id // Custom format (e.g., INV-2024-001)
+  patientId     String
+  treatments    Json         // Array of treatment objects with all details
+  subtotal      Float        // Sum of all treatment base prices
+  vatTotal      Float        @default(0) // Sum of all VAT amounts
+  totalAmount   Float        // Total invoice amount (subtotal + vatTotal)
+  paidAmount    Float        @default(0) // Sum of all paid amounts from treatments
+  pendingAmount Float        @default(0) // Remaining amount to be paid (totalAmount - paidAmount)
+  status        InvoiceStatus @default(UNPAID)
+  createdById   String?      // Staff who created the invoice
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  
+  // Relations
+  patient       Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  createdBy     Staff?       @relation("InvoiceCreatedByStaff", fields: [createdById], references: [id])
+  
+  @@map("invoices")
+}
+
+model Prescription {
+  id             String   @id // Custom RX-XXXX format
+  patientId      String
+  prescribedById String
+  details        Json    // Contains medication, dosage, instructions, etc.
+  issuedAt       DateTime @default(now())
+  patient        Patient  @relation(fields: [patientId], references: [id])
+  prescribedBy   Staff    @relation(fields: [prescribedById], references: [id])
+}
+
+model Queue {
+  id            String      @id @default(uuid())
+  patientId     String
+  assignedStaff String?
+  status        QueueStatus @default(WAITING)
+  appointmentId String?
+  checkInTime   DateTime?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  patient       Patient     @relation(fields: [patientId], references: [id])
+  staff         Staff?      @relation(fields: [assignedStaff], references: [id])
+}
+
+model MedicalHistory {
+  id              String    @id @default(uuid())
+  patientId       String    @unique
+  allergies       String?
+  chronicDiseases String?
+  pastSurgeries   String?
+  medications     String?
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  patient         Patient   @relation(fields: [patientId], references: [id])
+}
+
+model DentalChart {
+  id             String          @id @default(uuid())
+  patientId      String
+  dentistId      String
+  toothAnnotations Json
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  patient        Patient         @relation(fields: [patientId], references: [id])
+  dentist        Staff           @relation(fields: [dentistId], references: [id])
+}
+
+model Document {
+  id         String   @id @default(uuid())
+  patientId  String
+  fileName   String
+  fileType   String
+  fileUrl    String
+  uploadDate DateTime @default(now())
+  notes      String?
+  patient    Patient  @relation(fields: [patientId], references: [id])
+}
+
